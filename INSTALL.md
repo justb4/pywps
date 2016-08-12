@@ -32,6 +32,7 @@ Install demo service
 
     $ git clone https://github.com/ldesousa/pywps-4-demo.git pywps-4-demo
     
+    $ sudo python setup.py install
 
 Run demo
 --------

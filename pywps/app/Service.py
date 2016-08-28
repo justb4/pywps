@@ -15,11 +15,11 @@ from pywps.inout.inputs import ComplexInput, LiteralInput, BoundingBoxInput
 from pywps.dblog import log_request, update_response
 
 from collections import deque
-import shutil
 import os
+import sys
 import uuid
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = logging.getLogger("PYWPS")
 
 class Service(object):
 
@@ -28,22 +28,25 @@ class Service(object):
 
     :param processes: A list of :class:`~Process` objects that are
                       provided by this service.
+
+    :param cfgfiles: A list of configuration files
     """
 
-    def __init__(self, processes=[], cfgfile=None):
+    def __init__(self, processes=[], cfgfiles=None):
         self.processes = {p.identifier: p for p in processes}
 
-        if cfgfile:
-            config.load_configuration(cfgfile)
+        if cfgfiles:
+            config.load_configuration(cfgfiles)
 
-        if config.get_config_value('server', 'logfile') and config.get_config_value('server', 'loglevel'):
-            LOGGER.setLevel(getattr(logging, config.get_config_value('server', 'loglevel')))
+        if config.get_config_value('server', 'file') and config.get_config_value('logging', 'level'):
+            LOGGER.setLevel(getattr(logging, config.get_config_value('logging', 'level')))
             msg_fmt = '%(asctime)s] [%(levelname)s] file=%(pathname)s line=%(lineno)s module=%(module)s function=%(funcName)s %(message)s'
-            fh = logging.FileHandler(config.get_config_value('server', 'logfile'))
+            fh = logging.FileHandler(config.get_config_value('server', 'file'))
             fh.setFormatter(logging.Formatter(msg_fmt))
             LOGGER.addHandler(fh)
         else:  # NullHandler
             LOGGER.addHandler(logging.NullHandler())
+
 
     def get_capabilities(self):
         process_elements = [p.capabilities_xml()
@@ -284,12 +287,14 @@ class Service(object):
         :param wps_request: pywps.WPSRequest structure with parsed inputs, still in memory
         :param uuid: string identifier of the request
         """
+        self._set_grass()
         response = None
         try:
             process = self.processes[identifier]
 
-            workdir = config.get_config_value('server', 'workdir')
-            tempdir = tempfile.mkdtemp(prefix='pyws_process_', dir=workdir)
+            workdir = os.path.abspath(
+                    config.get_config_value('server', 'workdir'))
+            tempdir = tempfile.mkdtemp(prefix='pywps_process_', dir=workdir)
             process.set_workdir(tempdir)
         except KeyError:
             raise InvalidParameterValue("Unknown process '%r'" % identifier, 'Identifier')
@@ -300,7 +305,6 @@ class Service(object):
             response = self._parse_and_execute(process, wps_request, uuid)
         finally:
             os.chdir(olddir)
-            shutil.rmtree(process.workdir)
 
         return response
 
@@ -310,7 +314,7 @@ class Service(object):
         LOGGER.debug('Checking if datainputs is required and has been passed')
         if process.inputs:
             if wps_request.inputs is None:
-                raise MissingParameterValue('', 'datainputs')
+                raise MissingParameterValue('Missing "datainputs" parameter', 'datainputs')
 
         LOGGER.debug('Checking if all mandatory inputs have been passed')
         data_inputs = {}
@@ -321,7 +325,9 @@ class Service(object):
                     raise MissingParameterValue(
                         inpt.identifier, inpt.identifier)
                 else:
-                    data_inputs[inpt.identifier] = inpt.clone()
+                    inputs = deque(maxlen=inpt.max_occurs)
+                    inputs.append(inpt.clone())
+                    data_inputs[inpt.identifier] = inputs
 
             # Replace the dicts with the dict of Literal/Complex inputs
             # set the input to the type defined in the process
@@ -371,7 +377,9 @@ class Service(object):
             for outpt in wps_request.outputs:
                 for proc_outpt in process.outputs:
                     if outpt == proc_outpt.identifier:
-                        return Response(proc_outpt.data)
+                        resp = Response(proc_outpt.data)
+                        resp.call_on_close(process.clean)
+                        return resp
 
             # if the specified identifier was not found raise error
             raise InvalidParameterValue('')
@@ -465,9 +473,8 @@ class Service(object):
             complex_data_handler(data_input, inpt)
 
             outinputs.append(data_input)
-
         if len(outinputs) < source.min_occurs:
-            raise MissingParameterValue(locator=source.identifier)
+            raise MissingParameterValue(description="Given data input is missing", locator=source.identifier)
         return outinputs
 
     def create_literal_inputs(self, source, inputs):
@@ -495,6 +502,38 @@ class Service(object):
 
         return outinputs
 
+    def _set_grass(self):
+        """Set environment variables needed for GRASS GIS support
+        """
+
+        if not PY2:
+            LOGGER.debug('Python3 is not supported by GRASS')
+            return
+
+        gisbase = config.get_config_value('grass', 'gisbase')
+        if gisbase and os.path.isdir(gisbase):
+            LOGGER.debug('GRASS GISBASE set to %s' % gisbase)
+
+            os.environ['GISBASE'] = gisbase
+
+            os.environ['LD_LIBRARY_PATH'] = '{}:{}'.format(
+                os.environ.get('LD_LIBRARY_PATH'),
+                os.path.join(gisbase, 'lib'))
+            os.putenv('LD_LIBRARY_PATH', os.environ.get('LD_LIBRARY_PATH'))
+
+            os.environ['PATH'] = '{}:{}:{}'.format(
+                os.environ.get('PATH'),
+                os.path.join(gisbase, 'bin'),
+                os.path.join(gisbase, 'scripts'))
+            os.putenv('PATH', os.environ.get('PATH'))
+
+            python_path = os.path.join(gisbase, 'etc', 'python')
+            os.environ['PYTHONPATH'] = '{}:{}'.format(os.environ.get('PYTHONPATH'),
+                    python_path)
+            os.putenv('PYTHONPATH', os.environ.get('PYTHONPATH'))
+            sys.path.insert(0, python_path)
+
+
     def create_bbox_inputs(self, source, inputs):
         """ Takes the http_request and parses the input to objects
         :return collections.deque:
@@ -509,7 +548,9 @@ class Service(object):
             outinputs.append(newinpt)
 
         if len(outinputs) < source.min_occurs:
-            raise MissingParameterValue(locator=source.identifier)
+            raise MissingParameterValue(
+                description='Number of inputs is lower than minium required number of inputs',
+                locator=source.identifier)
 
         return outinputs
 
@@ -559,7 +600,10 @@ class Service(object):
                 message = e.locator
                 status = e.code
                 status_percentage = 100
-            update_response(request_uuid, FakeResponse, close=True)
+            try:
+                update_response(request_uuid, FakeResponse, close=True)
+            except NoApplicableCode as e:
+                return e
             return e
 
 

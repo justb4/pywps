@@ -74,6 +74,7 @@ class IOHandler(object):
         self.source = None
         self._tempfile = None
         self.workdir = workdir
+        self._stream = None
 
         self.valid_mode = mode
 
@@ -160,8 +161,11 @@ class IOHandler(object):
     def get_stream(self):
         """Get source as stream object"""
         if self.source_type == SOURCE_TYPE.FILE:
+            if self._stream and not self._stream.closed:
+                self._stream.close()
             from io import FileIO
-            return FileIO(self.source, mode='r', closefd=True)
+            self._stream = FileIO(self.source, mode='r', closefd=True)
+            return self._stream
         elif self.source_type == SOURCE_TYPE.STREAM:
             return self.source
         elif self.source_type == SOURCE_TYPE.DATA:
@@ -466,7 +470,18 @@ class BBoxInput(BasicIO, BasicBoundingBox, IOHandler):
 
     @property
     def json(self):
-        """Get JSON representation of the input
+        """Get JSON representation of the input. It returns following keys in
+        the JSON object:
+
+            * identifier
+            * title
+            * abstract
+            * type
+            * crs
+            * bbox
+            * dimensions
+            * workdir
+            * mode
         """
         return {
             'identifier': self.identifier,

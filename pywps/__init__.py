@@ -28,14 +28,14 @@
 ##############################################################################
 
 import logging
+
 import os
 
 from lxml.builder import ElementMaker
 
-__version__ = '4.0.0-alpha2'
+__version__ = '4.0.0-beta1'
 
-LOGGER = logging.getLogger(__name__)
-
+LOGGER = logging.getLogger('PYWPS')
 LOGGER.debug('setting core variables')
 
 PYWPS_INSTALL_DIR = os.path.dirname(os.path.abspath(__file__))

@@ -10,6 +10,13 @@ import lxml.etree as etree
 class BoundingBoxOutput(basic.BBoxInput):
     """
     :param identifier: The name of this input.
+    :param str title: Title of the input
+    :param str abstract: Input abstract
+    :param crss: List of supported coordinate reference system (e.g. ['EPSG:4326'])
+    :param int dimensions: number of dimensions (2 or 3)
+    :param int min_occurs: minimum occurence
+    :param int max_occurs: maximum occurence
+    :param pywps.validator.mode.MODE mode: validation mode (none to strict)
     """
 
     def __init__(self, identifier, title, crss, abstract='',
@@ -80,11 +87,10 @@ class ComplexOutput(basic.ComplexOutput):
     """
     :param identifier: The name of this output.
     :param title: Readable form of the output name.
-    :param supported_formats: List of supported
-            output formats for this output.
-            Should be list of :class:`~Format` object.
-            The first format in the list will be used as the default.
-    :param abstract: Description of the output
+    :param pywps.inout.formats.Format  supported_formats: List of supported
+        formats. The first format in the list will be used as the default.
+    :param str abstract: Description of the output
+    :param pywps.validator.mode.MODE mode: validation mode (none to strict)
     """
 
     def __init__(self, identifier, title,  supported_formats=None,
@@ -200,9 +206,11 @@ class ComplexOutput(basic.ComplexOutput):
 class LiteralOutput(basic.LiteralOutput):
     """
     :param identifier: The name of this output.
-    :param data_type: Type of literal input (e.g. `string`, `float`...).
-    :param value: Resulting value
-            Should be :class:`~String` object.
+    :param str title: Title of the input
+    :param pywps.inout.literaltypes.LITERAL_DATA_TYPES data_type: data type
+    :param str abstract: Input abstract
+    :param str uoms: units
+    :param pywps.validator.mode.MODE mode: validation mode (none to strict)
     """
 
     def __init__(self, identifier, title, data_type='string', abstract='',

@@ -8,20 +8,20 @@ from pywps.app.basic import xml_response
 from pywps.exceptions import NoApplicableCode
 import pywps.configuration as config
 from pywps.dblog import update_response
+from collections import namedtuple
 
+_STATUS = namedtuple('Status', 'ERROR_STATUS, NO_STATUS, STORE_STATUS,'
+        'STORE_AND_UPDATE_STATUS, DONE_STATUS')
+
+STATUS = _STATUS(0, 10, 20, 30, 40)
 
 class WPSResponse(object):
-
-    NO_STATUS = 0
-    STORE_STATUS = 1
-    STORE_AND_UPDATE_STATUS = 2
-    DONE_STATUS = 3
 
     def __init__(self, process, wps_request, uuid):
         """constructor
 
-        :param process: instance of  class:`pywps.app.Process.Process`
-        :param wps_request: instance of class:`pywps.app.WPSRequest.WPSRequest`
+        :param pywps.app.Process.Process process:
+        :param pywps.app.WPSRequest.WPSRequest wps_request:
         :param uuid: string this request uuid
         """
 
@@ -29,12 +29,21 @@ class WPSResponse(object):
         self.wps_request = wps_request
         self.outputs = {o.identifier: o for o in process.outputs}
         self.message = ''
-        self.status = self.NO_STATUS
+        self.status = STATUS.NO_STATUS
         self.status_percentage = 0
         self.doc = None
         self.uuid = uuid
 
-    def update_status(self, message=None, status_percentage=None, status=None):
+    def update_status(self, message=None, status_percentage=None, status=None,
+            clean=True):
+        """
+        Update status report of currently running process instance
+
+        :param str message: Message you need to share with the client
+        :param int status_percentage: Percent done (number betwen <0-100>)
+        :param pywps.app.WPSResponse.STATUS status: process status - user should usually
+            ommit this parameter
+        """
 
         if message:
             self.message = message
@@ -45,17 +54,16 @@ class WPSResponse(object):
         if status_percentage:
             self.status_percentage = status_percentage
 
-        # rebuild the doc and update the status xml file
-        self.doc = self._construct_doc()
-
-
         # check if storing of the status is requested
-        if self.status >= self.STORE_STATUS:
-            self.write_response_doc(self.doc)
+        if self.status >= STATUS.STORE_AND_UPDATE_STATUS:
+
+            # rebuild the doc and update the status xml file
+            self.doc = self._construct_doc()
+            self.write_response_doc(self.doc, clean)
 
         update_response(self.uuid, self)
 
-    def write_response_doc(self, doc):
+    def write_response_doc(self, doc, clean=True):
         # TODO: check if file/directory is still present, maybe deleted in mean time
 
         try:
@@ -63,6 +71,10 @@ class WPSResponse(object):
                 f.write(etree.tostring(doc, pretty_print=True, encoding='utf-8').decode('utf-8'))
                 f.flush()
                 os.fsync(f.fileno())
+
+            if self.status >= STATUS.DONE_STATUS and clean:
+                self.process.clean()
+
         except IOError as e:
             raise NoApplicableCode('Writing Response Document failed with : %s' % e)
 
@@ -121,7 +133,7 @@ class WPSResponse(object):
             '?service=WPS&request=GetCapabilities'
         )
 
-        if self.status >= self.STORE_STATUS:
+        if self.status >= STATUS.STORE_STATUS:
             if self.process.status_location:
                 doc.attrib['statusLocation'] = self.process.status_url
 
@@ -143,12 +155,12 @@ class WPSResponse(object):
 
         # Status XML
         # return the correct response depending on the progress of the process
-        if self.status >= self.STORE_AND_UPDATE_STATUS:
+        if self.status >= STATUS.STORE_AND_UPDATE_STATUS:
             if self.status_percentage == 0:
                 self.message = 'PyWPS Process %s accepted' % self.process.identifier
                 status_doc = self._process_accepted()
                 doc.append(status_doc)
-                self.write_response_doc(doc)
+                #self.write_response_doc(doc)
                 return doc
             elif 0 < self.status_percentage < 100:
                 status_doc = self._process_started()
@@ -179,6 +191,12 @@ class WPSResponse(object):
         doc.append(WPS.ProcessOutputs(*output_elements))
         return doc
 
+    def call_on_close(self, function):
+        """Custom implementation of call_on_close of werkzeug
+        TODO: rewrite this using werkzeug's tools
+        """
+        self._close_functions.push(function)
+
     @Request.application
     def __call__(self, request):
         doc = None
@@ -188,5 +206,8 @@ class WPSResponse(object):
             raise httpexp
         except Exception as exp:
             raise NoApplicableCode(exp)
+
+        if self.status >= STATUS.DONE_STATUS:
+            self.process.clean()
 
         return xml_response(doc)
